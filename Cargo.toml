@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 libspa-sys = "0.8.0"
 pipewire = "0.8.0"
+rodio = "0.19.0"
