@@ -1,6 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
+    time::Duration,
 };
 
 use pipewire::{
@@ -26,6 +27,7 @@ pub const CHAN_SIZE: usize = std::mem::size_of::<i16>();
 pub struct PlayBuf {
     pub target: String,
     pub buf: Vec<i16>,
+    pub done: bool,
 }
 
 struct State {
@@ -147,6 +149,7 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
                                         slice.fill_with(|| 0);
                                     }
                                 }
+                                playbuf.done = true;
                                 println!("dead stream bro");
                                 return;
                                 //*cursor = 0;
@@ -219,8 +222,22 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
                 )
                 .expect("did no connect");
             println!("connected stream? {:#?}", node_id);
-
             stream_cell.borrow_mut().replace(stream);
+
+            let stream_clone = stream_cell.clone();
+            let listener_clone = listener_cell.clone();
+            mainloop
+                .loop_()
+                .add_timer(move |_| {
+                    if playbuf.done {
+                        stream_clone.take();
+                        listener_clone.take();
+                    }
+                })
+                .update_timer(
+                    Some(Duration::from_millis(1)),
+                    Some(Duration::from_millis(100)),
+                );
         }
     });
 

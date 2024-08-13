@@ -30,6 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     pw_sender.send(PlayBuf{
         target: "".to_owned(),
         buf,
+        done: false,
     }).expect("bad send i guess");
 
     pw_thread.join().expect("idk");
