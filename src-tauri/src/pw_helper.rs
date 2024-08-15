@@ -79,6 +79,16 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
     let core = context.connect(None).expect("failed to connect to core");
     let registry = core.get_registry().expect("failed to get registry");
 
+    // audio info will be the same across all players, so might as well set this crap up now
+    let mut audio_info = AudioInfoRaw::new();
+    audio_info.set_format(AudioFormat::S16LE);
+    audio_info.set_rate(DEFAULT_RATE);
+    audio_info.set_channels(DEFAULT_CHANNELS);
+    let mut position = [0; MAX_CHANNELS];
+    position[0] = libspa_sys::SPA_AUDIO_CHANNEL_FL;
+    position[1] = libspa_sys::SPA_AUDIO_CHANNEL_FR;
+    audio_info.set_position(position);
+
     let state: Rc<RefCell<State>> = Rc::new(RefCell::new(State::new()));
 
     // first set up listener. this will maintain our state so we always have the latest node IDs
@@ -124,9 +134,8 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
     // setup listener for play events
     let state_clone = state.clone();
     let _receiver = pw_receiver.attach(mainloop.loop_(), {
-        let mainloop = mainloop.clone();
+        //let mainloop = mainloop.clone();
         move |playbuf| {
-            let (done_tx, done_rx) = mpsc::channel();
             println!("got event");
             let mut state = state_clone.borrow_mut();
             let mut maybe_node_id = &state.discord_node;
@@ -152,7 +161,10 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
             )
             .expect("couldnt create stream");
 
+            // cursor to track how far through the buffer we are
             let cursor: usize = 0;
+            // channel for telling timer when to drop the stream/listener
+            let (done_tx, done_rx) = mpsc::channel();
             let done_tx_clone = done_tx.clone();
             let listener = stream
                 .add_local_listener_with_user_data(cursor)
@@ -205,15 +217,6 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
                 .register()
                 .expect("couldnt register stream listener");
 
-            let mut audio_info = AudioInfoRaw::new();
-            audio_info.set_format(AudioFormat::S16LE);
-            audio_info.set_rate(DEFAULT_RATE);
-            audio_info.set_channels(DEFAULT_CHANNELS);
-            let mut position = [0; MAX_CHANNELS];
-            position[0] = libspa_sys::SPA_AUDIO_CHANNEL_FL;
-            position[1] = libspa_sys::SPA_AUDIO_CHANNEL_FR;
-            audio_info.set_position(position);
-
             let values: Vec<u8> = PodSerializer::serialize(
                 std::io::Cursor::new(Vec::new()),
                 &Value::Object(Object {
@@ -241,22 +244,14 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
                 .expect("did no connect");
             println!("connected stream? {:#?}", node_id);
 
+            // pop our stream and listener onto the state. done will be set via channel by
+            // the stream loop.
             let player = Player {
                 stream,
                 listener,
                 done: done_rx,
             };
             state.add_player(player);
-
-            //let stream_cell = Rc::new(RefCell::new(None));
-            //let listener_cell = Rc::new(RefCell::new(None));
-            //stream_cell.replace(Some(stream));
-            //listener_cell.replace(Some(listener));
-            //let _attached = done_rx.attach(mainloop.loop_(), move |_| {
-            //    println!("done_rx");
-            //    stream_cell.take().expect("um").disconnect().expect("idk");
-            //    listener_cell.take().expect("um").unregister();
-            //});
         }
     });
 
@@ -264,12 +259,11 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
     let timer = mainloop.loop_().add_timer(move |_| {
         let mut state = state_clone.borrow_mut();
 
+        // loop over players, drop the ones that are done.
+        // this auto disconnects stuff since the last references to stream/listener are dropped.
         state.players.retain(|player| {
             if let Ok(_) = player.done.try_recv() {
                 println!("disconnecting");
-                //let player = player.to_owned();
-                //player.stream.disconnect().expect("ok");
-                //player.listener.unregister();
                 false
             } else {
                 true
