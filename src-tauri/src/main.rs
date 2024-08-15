@@ -36,18 +36,18 @@ async fn greet(state: tauri::State<'_, MyState>) -> Result<(), String> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     pw::init();
 
-    println!("read file");
-
     let (pw_sender, pw_receiver) = pipewire::channel::channel();
 
     let pw_thread = thread::spawn(move || pw_thread(pw_receiver));
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(MyState{pw_sender})
         .invoke_handler(tauri::generate_handler![greet])
-        .run(tauri::generate_context!())?;
+        .run(tauri::generate_context!());
 
     pw_thread.join().expect("idk");
+
+    app.expect("poop");
 
     Ok(())
 }
