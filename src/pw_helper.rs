@@ -1,6 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
+    sync::mpsc,
     time::Duration,
 };
 
@@ -24,16 +25,25 @@ pub const DEFAULT_VOLUME: f64 = 0.7;
 pub const CHAN_SIZE: usize = std::mem::size_of::<i16>();
 
 #[derive(Debug)]
+struct Done;
+
+#[derive(Debug)]
 pub struct PlayBuf {
     pub target: String,
     pub buf: Vec<i16>,
-    pub done: bool,
 }
 
 struct State {
     factory: Option<String>,
     loopback_node: Option<String>,
     discord_node: Option<String>,
+    players: Vec<Player>,
+}
+
+struct Player {
+    stream: Stream,
+    listener: StreamListener<usize>,
+    done: mpsc::Receiver<Done>,
 }
 
 impl State {
@@ -42,6 +52,7 @@ impl State {
             factory: None,
             loopback_node: None,
             discord_node: None,
+            players: vec![],
         }
     }
 
@@ -55,6 +66,10 @@ impl State {
 
     fn set_discord(&mut self, discord_node: Option<String>) {
         self.discord_node = discord_node;
+    }
+
+    fn add_player(&mut self, player: Player) {
+        self.players.push(player);
     }
 }
 
@@ -106,19 +121,22 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
     // Process all pending events to get the factory.
     do_roundtrip(&mainloop, &core);
 
-    let stream_cell = Rc::new(RefCell::new(None));
-    let listener_cell: Rc<RefCell<Option<StreamListener<usize>>>> = Rc::new(RefCell::new(None));
-
     // setup listener for play events
     let state_clone = state.clone();
     let _receiver = pw_receiver.attach(mainloop.loop_(), {
         let mainloop = mainloop.clone();
         move |playbuf| {
+            let (done_tx, done_rx) = mpsc::channel();
             println!("got event");
-            let maybe_node_id = &state_clone.borrow().discord_node;
+            let mut state = state_clone.borrow_mut();
+            let mut maybe_node_id = &state.discord_node;
             if maybe_node_id.is_none() {
-                println!("node was none");
-                return;
+                println!("node was none, using loopback");
+                maybe_node_id = &state.loopback_node;
+                if maybe_node_id.is_none() {
+                    println!("node was none");
+                    return;
+                }
             }
             let node_id = maybe_node_id.as_ref().expect("umn?");
 
@@ -135,6 +153,7 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
             .expect("couldnt create stream");
 
             let cursor: usize = 0;
+            let done_tx_clone = done_tx.clone();
             let listener = stream
                 .add_local_listener_with_user_data(cursor)
                 .process(move |stream, cursor| {
@@ -149,7 +168,7 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
                                         slice.fill_with(|| 0);
                                     }
                                 }
-                                playbuf.done = true;
+                                done_tx_clone.send(Done).expect("couldnt notify done");
                                 println!("dead stream bro");
                                 return;
                                 //*cursor = 0;
@@ -185,7 +204,6 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
                 })
                 .register()
                 .expect("couldnt register stream listener");
-            listener_cell.borrow_mut().replace(listener);
 
             let mut audio_info = AudioInfoRaw::new();
             audio_info.set_format(AudioFormat::S16LE);
@@ -222,24 +240,46 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
                 )
                 .expect("did no connect");
             println!("connected stream? {:#?}", node_id);
-            stream_cell.borrow_mut().replace(stream);
 
-            let stream_clone = stream_cell.clone();
-            let listener_clone = listener_cell.clone();
-            mainloop
-                .loop_()
-                .add_timer(move |_| {
-                    if playbuf.done {
-                        stream_clone.take();
-                        listener_clone.take();
-                    }
-                })
-                .update_timer(
-                    Some(Duration::from_millis(1)),
-                    Some(Duration::from_millis(100)),
-                );
+            let player = Player {
+                stream,
+                listener,
+                done: done_rx,
+            };
+            state.add_player(player);
+
+            //let stream_cell = Rc::new(RefCell::new(None));
+            //let listener_cell = Rc::new(RefCell::new(None));
+            //stream_cell.replace(Some(stream));
+            //listener_cell.replace(Some(listener));
+            //let _attached = done_rx.attach(mainloop.loop_(), move |_| {
+            //    println!("done_rx");
+            //    stream_cell.take().expect("um").disconnect().expect("idk");
+            //    listener_cell.take().expect("um").unregister();
+            //});
         }
     });
+
+    let state_clone = state.clone();
+    let timer = mainloop.loop_().add_timer(move |_| {
+        let mut state = state_clone.borrow_mut();
+
+        state.players.retain(|player| {
+            if let Ok(_) = player.done.try_recv() {
+                println!("disconnecting");
+                //let player = player.to_owned();
+                //player.stream.disconnect().expect("ok");
+                //player.listener.unregister();
+                false
+            } else {
+                true
+            }
+        });
+    });
+    timer.update_timer(
+        Some(Duration::from_millis(10)),
+        Some(Duration::from_millis(100)),
+    );
 
     mainloop.run();
 }
