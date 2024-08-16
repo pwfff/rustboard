@@ -18,7 +18,7 @@ struct MyState {
 #[tauri::command]
 async fn greet(state: tauri::State<'_, MyState>) -> Result<(), String> {
     // Load a sound from a file, using a path relative to Cargo.toml
-    let file = BufReader::new(File::open("/home/pwf/BEEG BEEG YOSHI.mp3").unwrap());
+    let file = BufReader::new(File::open("/home/pwf/One-Winged Angel (Beta Version) - Final Fantasy VII [OG_e8ve0l_w].opus").unwrap());
     // Decode that sound file into a source
     let source = Decoder::new(file).unwrap().buffered();
     let conv = UniformSourceIterator::<_, i16>::new(source, DEFAULT_CHANNELS as u16, DEFAULT_RATE)

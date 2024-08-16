@@ -27,7 +27,7 @@ pub const CHAN_SIZE: usize = std::mem::size_of::<i16>();
 #[derive(Debug)]
 struct Done;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayBuf {
     pub target: String,
     pub buf: Vec<i16>,
@@ -79,16 +79,6 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
     let core = context.connect(None).expect("failed to connect to core");
     let registry = core.get_registry().expect("failed to get registry");
 
-    // audio info will be the same across all players, so might as well set this crap up now
-    let mut audio_info = AudioInfoRaw::new();
-    audio_info.set_format(AudioFormat::S16LE);
-    audio_info.set_rate(DEFAULT_RATE);
-    audio_info.set_channels(DEFAULT_CHANNELS);
-    let mut position = [0; MAX_CHANNELS];
-    position[0] = libspa_sys::SPA_AUDIO_CHANNEL_FL;
-    position[1] = libspa_sys::SPA_AUDIO_CHANNEL_FR;
-    audio_info.set_position(position);
-
     let state: Rc<RefCell<State>> = Rc::new(RefCell::new(State::new()));
 
     // first set up listener. this will maintain our state so we always have the latest node IDs
@@ -137,121 +127,16 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
         //let mainloop = mainloop.clone();
         move |playbuf| {
             println!("got event");
-            let mut state = state_clone.borrow_mut();
-            let mut maybe_node_id = &state.discord_node;
-            if maybe_node_id.is_none() {
-                println!("node was none, using loopback");
-                maybe_node_id = &state.loopback_node;
-                if maybe_node_id.is_none() {
-                    println!("node was none");
-                    return;
-                }
+            let nodes: Vec<String> = vec![
+                state_clone.borrow().discord_node.clone(),
+                state_clone.borrow().loopback_node.clone(),
+            ]
+            .iter()
+            .filter_map(|n| n.to_owned())
+            .collect();
+            for node_id in nodes {
+                play_to_node(&core, state_clone.clone(), playbuf.clone(), node_id);
             }
-            let node_id = maybe_node_id.as_ref().expect("umn?");
-
-            let stream = Stream::new(
-                &core,
-                "rustboard-src",
-                properties! {
-                    *pipewire::keys::MEDIA_TYPE => "Audio",
-                    *pipewire::keys::MEDIA_ROLE => "Music",
-                    *pipewire::keys::MEDIA_CATEGORY => "Playback",
-                    *pipewire::keys::AUDIO_CHANNELS => "2",
-                },
-            )
-            .expect("couldnt create stream");
-
-            // cursor to track how far through the buffer we are
-            let cursor: usize = 0;
-            // channel for telling timer when to drop the stream/listener
-            let (done_tx, done_rx) = mpsc::channel();
-            let done_tx_clone = done_tx.clone();
-            let listener = stream
-                .add_local_listener_with_user_data(cursor)
-                .process(move |stream, cursor| {
-                    match stream.dequeue_buffer() {
-                        None => println!("No buffer received"),
-                        Some(mut buffer) => {
-                            let datas = buffer.datas_mut();
-                            let buf = &playbuf.buf;
-                            if *cursor > buf.len() {
-                                for data in datas {
-                                    if let Some(slice) = data.data() {
-                                        slice.fill_with(|| 0);
-                                    }
-                                }
-                                done_tx_clone.send(Done).expect("couldnt notify done");
-                                println!("dead stream bro");
-                                return;
-                                //*cursor = 0;
-                            }
-                            let stride = DEFAULT_CHANNELS as usize;
-                            let mut n_frames = 0;
-                            for data in datas {
-                                n_frames = if let Some(slice) = data.data() {
-                                    let n_frames = slice.len() / CHAN_SIZE;
-                                    let start = *cursor;
-                                    let end = (n_frames + *cursor).min(buf.len());
-                                    println!("n_frames {n_frames:#?} cursor {cursor:#?}");
-                                    let sample: Vec<u8> = buf[start..end]
-                                        .into_iter()
-                                        .map(|v| i16::to_le_bytes(*v))
-                                        .flatten()
-                                        .collect();
-                                    slice[..sample.len()].copy_from_slice(&sample);
-                                    n_frames
-                                } else {
-                                    0
-                                };
-
-                                let chunk = data.chunk_mut();
-                                *chunk.offset_mut() = 0;
-                                *chunk.stride_mut() = stride as _;
-                                *chunk.size_mut() = (stride * n_frames) as _;
-                            }
-
-                            *cursor += n_frames;
-                        }
-                    }
-                })
-                .register()
-                .expect("couldnt register stream listener");
-
-            let values: Vec<u8> = PodSerializer::serialize(
-                std::io::Cursor::new(Vec::new()),
-                &Value::Object(Object {
-                    type_: libspa_sys::SPA_TYPE_OBJECT_Format,
-                    id: libspa_sys::SPA_PARAM_EnumFormat,
-                    properties: audio_info.into(),
-                }),
-            )
-            .unwrap()
-            .0
-            .into_inner();
-
-            let mut params = [Pod::from_bytes(&values).unwrap()];
-
-            let node_id: u32 = node_id.parse().expect("wasnt u32");
-
-            println!("connecting stream? {:#?}", node_id);
-            stream
-                .connect(
-                    Direction::Output,
-                    Some(node_id),
-                    StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
-                    &mut params,
-                )
-                .expect("did no connect");
-            println!("connected stream? {:#?}", node_id);
-
-            // pop our stream and listener onto the state. done will be set via channel by
-            // the stream loop.
-            let player = Player {
-                stream,
-                listener,
-                done: done_rx,
-            };
-            state.add_player(player);
         }
     });
 
@@ -276,6 +161,124 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
     );
 
     mainloop.run();
+}
+
+fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_id: String) {
+    let mut state = state.borrow_mut();
+
+    // audio info will be the same across all players, so might as well set this crap up now
+    let mut audio_info = AudioInfoRaw::new();
+    audio_info.set_format(AudioFormat::S16LE);
+    audio_info.set_rate(DEFAULT_RATE);
+    audio_info.set_channels(DEFAULT_CHANNELS);
+    let mut position = [0; MAX_CHANNELS];
+    position[0] = libspa_sys::SPA_AUDIO_CHANNEL_FL;
+    position[1] = libspa_sys::SPA_AUDIO_CHANNEL_FR;
+    audio_info.set_position(position);
+
+    let stream = Stream::new(
+        core,
+        "rustboard-src",
+        properties! {
+            *pipewire::keys::MEDIA_TYPE => "Audio",
+            *pipewire::keys::MEDIA_ROLE => "Music",
+            *pipewire::keys::MEDIA_CATEGORY => "Playback",
+            *pipewire::keys::AUDIO_CHANNELS => "2",
+        },
+    )
+    .expect("couldnt create stream");
+
+    // cursor to track how far through the buffer we are
+    let cursor: usize = 0;
+    // channel for telling timer when to drop the stream/listener
+    let (done_tx, done_rx) = mpsc::channel();
+    let done_tx_clone = done_tx.clone();
+    let listener = stream
+        .add_local_listener_with_user_data(cursor)
+        .process(move |stream, cursor| {
+            match stream.dequeue_buffer() {
+                None => println!("No buffer received"),
+                Some(mut buffer) => {
+                    let datas = buffer.datas_mut();
+                    let buf = &playbuf.buf;
+                    if *cursor > buf.len() {
+                        for data in datas {
+                            if let Some(slice) = data.data() {
+                                slice.fill_with(|| 0);
+                            }
+                        }
+                        done_tx_clone.send(Done).expect("couldnt notify done");
+                        println!("dead stream bro");
+                        return;
+                        //*cursor = 0;
+                    }
+                    let stride = DEFAULT_CHANNELS as usize;
+                    let mut n_frames = 0;
+                    for data in datas {
+                        n_frames = if let Some(slice) = data.data() {
+                            let n_frames = slice.len() / CHAN_SIZE;
+                            let start = *cursor;
+                            let end = (n_frames + *cursor).min(buf.len());
+                            println!("n_frames {n_frames:#?} cursor {cursor:#?}");
+                            let sample: Vec<u8> = buf[start..end]
+                                .into_iter()
+                                .map(|v| i16::to_le_bytes(*v))
+                                .flatten()
+                                .collect();
+                            slice[..sample.len()].copy_from_slice(&sample);
+                            n_frames
+                        } else {
+                            0
+                        };
+
+                        let chunk = data.chunk_mut();
+                        *chunk.offset_mut() = 0;
+                        *chunk.stride_mut() = stride as _;
+                        *chunk.size_mut() = (stride * n_frames) as _;
+                    }
+
+                    *cursor += n_frames;
+                }
+            }
+        })
+        .register()
+        .expect("couldnt register stream listener");
+
+    let values: Vec<u8> = PodSerializer::serialize(
+        std::io::Cursor::new(Vec::new()),
+        &Value::Object(Object {
+            type_: libspa_sys::SPA_TYPE_OBJECT_Format,
+            id: libspa_sys::SPA_PARAM_EnumFormat,
+            properties: audio_info.into(),
+        }),
+    )
+    .unwrap()
+    .0
+    .into_inner();
+
+    let mut params = [Pod::from_bytes(&values).unwrap()];
+
+    let node_id: u32 = node_id.parse().expect("wasnt u32");
+
+    println!("connecting stream? {:#?}", node_id);
+    stream
+        .connect(
+            Direction::Output,
+            Some(node_id),
+            StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
+            &mut params,
+        )
+        .expect("did no connect");
+    println!("connected stream? {:#?}", node_id);
+
+    // pop our stream and listener onto the state. done will be set via channel by
+    // the stream loop.
+    let player = Player {
+        stream,
+        listener,
+        done: done_rx,
+    };
+    state.add_player(player);
 }
 
 /// Do a single roundtrip to process all events.

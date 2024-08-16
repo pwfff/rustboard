@@ -17,7 +17,7 @@ tauri-build = { version = "1.5.3", features = [] }
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-tauri = { version = "1.7.0", features = [] }
+tauri = { version = "1.7.1", features = ["linux-protocol-headers"] }
 libspa-sys = "0.8.0"
 pipewire = "0.8.0"
 rodio = "0.19.0"
