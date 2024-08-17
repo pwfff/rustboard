@@ -29,7 +29,6 @@ struct Done;
 
 #[derive(Debug, Clone)]
 pub struct PlayBuf {
-    pub target: String,
     pub buf: Vec<i16>,
 }
 
@@ -37,6 +36,7 @@ struct State {
     factory: Option<String>,
     loopback_node: Option<String>,
     discord_node: Option<String>,
+    deadlock_node: Option<String>,
     players: Vec<Player>,
 }
 
@@ -52,6 +52,7 @@ impl State {
             factory: None,
             loopback_node: None,
             discord_node: None,
+            deadlock_node: None,
             players: vec![],
         }
     }
@@ -62,6 +63,10 @@ impl State {
 
     fn set_loopback(&mut self, loopback_node: Option<String>) {
         self.loopback_node = loopback_node;
+    }
+
+    fn set_deadlock(&mut self, deadlock_node: Option<String>) {
+        self.deadlock_node = deadlock_node;
     }
 
     fn set_discord(&mut self, discord_node: Option<String>) {
@@ -94,6 +99,16 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
                 }
 
                 if let Some(alias) = props.get("port.alias") {
+                    if alias.contains("project8") {
+                        if props.get("port.direction") != Some("in") {
+                            return;
+                        }
+                        println!("got project8");
+                        state_clone.borrow_mut().set_deadlock(Some(
+                            props.get("node.id").expect("node id nope").to_owned(),
+                        ));
+                    }
+
                     if alias.contains("WEBRTC") {
                         if props.get("port.direction") != Some("in") {
                             return;
@@ -130,11 +145,13 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
             let nodes: Vec<String> = vec![
                 state_clone.borrow().discord_node.clone(),
                 state_clone.borrow().loopback_node.clone(),
+                state_clone.borrow().deadlock_node.clone(),
             ]
             .iter()
             .filter_map(|n| n.to_owned())
             .collect();
             for node_id in nodes {
+                println!("playing to {:?}", node_id);
                 play_to_node(&core, state_clone.clone(), playbuf.clone(), node_id);
             }
         }
