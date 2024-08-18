@@ -22,6 +22,7 @@ struct MyState {
 
 #[tauri::command]
 async fn greet(state: tauri::State<'_, MyState>) -> Result<(), String> {
+    println!("??");
     state
         .pw_sender
         .send(state.playbuf.clone())
@@ -44,14 +45,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .create_session()
         .await
         .expect("couldnt create session");
-    //let window = app.get_window("rustboard").expect("no main window");
-    //let handle = window.window_handle().expect("no handle i guess").as_raw();
-    let window = WindowIdentifier::None;
-    //let window = WindowIdentifier::from_raw_handle(&handle, None).await;
-    let shortcut = NewShortcut::new("rustboard-hotkey", "hotkey 1 for rustboard")
-        .preferred_trigger("ALT+SHIFT+a");
+
+    let desc = "hotkey 1 for rustboard";
+    let shortcut = NewShortcut::new("rustboard-hotkey", desc).preferred_trigger("ALT+SHIFT+a");
+    let mut new_shortcuts = vec![];
+    if !globals
+        .list_shortcuts(&session)
+        .await
+        .expect("couldnt list shortcuts")
+        .response()
+        .expect("bad response")
+        .shortcuts()
+        .iter()
+        .any(|s| s.description() == desc)
+    {
+        new_shortcuts.push(shortcut);
+    };
     globals
-        .bind_shortcuts(&session, &[shortcut], &window)
+        .bind_shortcuts(&session, new_shortcuts.as_slice(), &WindowIdentifier::None)
         .await
         .expect("couldnt bind shortcuts");
 

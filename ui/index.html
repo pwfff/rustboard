@@ -11,7 +11,7 @@
     <button id="clickme">um</button>
     <script>
       // access the pre-bundled global API functions
-      const { invoke } = window.__TAURI__.tauri
+      const { invoke } = window.__TAURI__.core
       document.getElementById('clickme').addEventListener('click', (event) => {
         invoke('greet');
       });

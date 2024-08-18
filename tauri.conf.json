@@ -1,11 +1,13 @@
 {
   "productName": "rustboard",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.tauri.dev.rustboard",
   "build": {
     "frontendDist": "ui"
   },
   "app": {
+    "enableGTKAppId": true,
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "rustboard",
