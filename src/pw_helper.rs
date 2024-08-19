@@ -41,8 +41,8 @@ struct State {
 }
 
 struct Player {
-    stream: Stream,
-    listener: StreamListener<usize>,
+    _stream: Stream,
+    _listener: StreamListener<usize>,
     done: mpsc::Receiver<Done>,
 }
 
@@ -291,8 +291,8 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
     // pop our stream and listener onto the state. done will be set via channel by
     // the stream loop.
     let player = Player {
-        stream,
-        listener,
+        _stream: stream,
+        _listener: listener,
         done: done_rx,
     };
     state.add_player(player);
