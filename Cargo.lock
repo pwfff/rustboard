@@ -879,12 +879,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "neato"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c9d06635e77bf34a8335710c82b2406eb29574fafdc3f18ecba8af821fda3a3"
-
-[[package]]
 name = "nix"
 version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1205,7 +1199,6 @@ dependencies = [
  "axum",
  "env_logger",
  "libspa-sys",
- "neato",
  "pipewire",
  "rodio",
  "serde",
