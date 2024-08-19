@@ -16,5 +16,8 @@ serde = { version = "1.0", features = ["derive"] }
 libspa-sys = "0.8.0"
 pipewire = "0.8.0"
 rodio = { version="0.19.0", features = ["symphonia-all"] }
-actix-web = "4.3.1"
 env_logger = "0.10.2"
+axum = "0.7.5"
+tokio = { version="1.29.1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version="0.3", features = ["env-filter"] }

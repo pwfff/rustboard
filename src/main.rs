@@ -1,10 +1,13 @@
 use crate::pw_helper::{DEFAULT_CHANNELS, DEFAULT_RATE};
-use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
+use axum::body::Bytes;
+use axum::extract::State;
+use axum::{http::StatusCode, routing::get, Router};
 use pipewire as pw;
 use rodio::source::UniformSourceIterator;
 use rodio::{Decoder, Source};
 use std::fs::File;
 use std::io::BufReader;
+use std::sync::{Arc, RwLock};
 
 mod pw_helper;
 use pw_helper::{pw_thread, PlayBuf};
@@ -14,21 +17,27 @@ struct MyState {
     pw_sender: pipewire::channel::Sender<PlayBuf>,
 }
 
-#[get("/")]
-async fn hello(data: web::Data<MyState>) -> impl Responder {
-    data.pw_sender.send(data.playbuf.clone()).expect("oops");
-    HttpResponse::Ok().body("Hello world!")
+type SharedState = Arc<RwLock<MyState>>;
+
+async fn play(State(state): State<SharedState>) -> Result<Bytes, StatusCode> {
+    let state = state.read().unwrap();
+    let sender = &state.pw_sender;
+    let playbuf = &state.playbuf;
+    sender.send(playbuf.clone()).expect("oops");
+    Ok("playing".into())
 }
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
+#[tokio::main]
+async fn main() {
     std::env::set_var("RUST_LOG", "debug");
-    env_logger::init();
+
+    // initialize tracing
+    tracing_subscriber::fmt::init();
 
     pw::init();
 
     let (pw_sender, pw_receiver) = pipewire::channel::channel();
-    let pw_thread = actix_web::rt::spawn(async move { pw_thread(pw_receiver) });
+    let pw_thread = tokio::spawn(async move { pw_thread(pw_receiver) });
 
     // Load a sound from a file, using a path relative to Cargo.toml
     let file = BufReader::new(
@@ -41,19 +50,13 @@ async fn main() -> std::io::Result<()> {
         .buffered();
     let buf: Vec<i16> = conv.collect();
 
-    HttpServer::new(move || {
-        App::new()
-            .app_data(web::Data::new(MyState {
-                pw_sender: pw_sender.clone(),
-                playbuf: PlayBuf { buf: buf.to_vec() },
-            }))
-            .service(hello)
-    })
-    .shutdown_timeout(3)
-    .bind(("127.0.0.1", 8081))?
-    .run()
-    .await
-    .expect("idk");
+    let shared_state = SharedState::new(RwLock::new(MyState {
+        pw_sender: pw_sender.clone(),
+        playbuf: PlayBuf { buf: buf.to_vec() },
+    }));
 
-    Ok(())
+    let app = Router::new().route("/", get(play).with_state(shared_state));
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
