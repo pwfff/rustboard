@@ -37,7 +37,7 @@ async fn main() {
     pw::init();
 
     let (pw_sender, pw_receiver) = pipewire::channel::channel();
-    let pw_thread = tokio::spawn(async move { pw_thread(pw_receiver) });
+    let _pw_thread = tokio::spawn(async move { pw_thread(pw_receiver) });
 
     // Load a sound from a file, using a path relative to Cargo.toml
     let file = BufReader::new(
@@ -59,4 +59,6 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
+
+    // TODO: quit signal and cleanup for pipewire stuff
 }
