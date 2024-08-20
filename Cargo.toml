@@ -22,3 +22,5 @@ tokio = { version="1.29.1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version="0.3", features = ["env-filter"] }
 slugify = "0.1.0"
+tower-http = { version = "0.5", features = ["fs", "trace"] }
+askama = "0.12.0"
