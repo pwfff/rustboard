@@ -213,22 +213,27 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
     let listener = stream
         .add_local_listener_with_user_data(cursor)
         .process(move |stream, cursor| {
+            let buf = &playbuf.buf;
+            if *cursor >= buf.len() {
+                // TODO: fix weird repeat sound at end??
+                //for data in datas {
+                //    if let Some(slice) = data.data() {
+                //        slice.fill_with(|| 0);
+                //    }
+                //    let chunk = data.chunk_mut();
+                //    *chunk.offset_mut() = 0;
+                //    *chunk.stride_mut() = 0;
+                //    *chunk.size_mut() = 0;
+                //}
+                done_tx_clone.send(Done).expect("couldnt notify done");
+                println!("dead stream bro");
+                return;
+                //*cursor = 0;
+            }
             match stream.dequeue_buffer() {
                 None => println!("No buffer received"),
                 Some(mut buffer) => {
                     let datas = buffer.datas_mut();
-                    let buf = &playbuf.buf;
-                    if *cursor > buf.len() {
-                        for data in datas {
-                            if let Some(slice) = data.data() {
-                                slice.fill_with(|| 0);
-                            }
-                        }
-                        done_tx_clone.send(Done).expect("couldnt notify done");
-                        println!("dead stream bro");
-                        return;
-                        //*cursor = 0;
-                    }
                     let stride = DEFAULT_CHANNELS as usize;
                     let mut n_frames = 0;
                     for data in datas {
@@ -243,6 +248,9 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
                                 .flatten()
                                 .collect();
                             slice[..sample.len()].copy_from_slice(&sample);
+                            if sample.len() < slice.len() {
+                                slice[sample.len()..].fill_with(|| 0);
+                            }
                             n_frames
                         } else {
                             0
