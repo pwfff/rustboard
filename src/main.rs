@@ -1,11 +1,16 @@
 use crate::pw_helper::{DEFAULT_CHANNELS, DEFAULT_RATE};
 use askama::Template;
+use audio_processor_dynamics::CompressorProcessor;
+use audio_processor_traits::audio_buffer::to_interleaved;
+use audio_processor_traits::{AudioBuffer, AudioContext, AudioProcessor, AudioProcessorSettings};
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::response::{Html, IntoResponse, Response};
 use axum::{http::StatusCode, routing::get, routing::post, Router};
+use ebur128::EbuR128;
 use pipewire as pw;
-use rodio::source::UniformSourceIterator;
+use rodio::buffer::SamplesBuffer;
+use rodio::source::{SamplesConverter, UniformSourceIterator};
 use rodio::{Decoder, Source};
 use serde::{Deserialize, Serialize};
 use slugify::slugify;
@@ -23,6 +28,18 @@ struct MyState {
     pw_sender: pipewire::channel::Sender<PlayBuf>,
 }
 
+fn db_to_amp(db: f32) -> f32 {
+    10f32.powf(db / 20.)
+}
+
+fn amp_to_db(amp: f32) -> f32 {
+    20. * amp.log10()
+}
+
+fn lufs_multiplier(current: f32, target: f32) -> f32 {
+    db_to_amp(target) / db_to_amp(current)
+}
+
 impl MyState {
     fn new(pw_sender: pipewire::channel::Sender<PlayBuf>) -> Self {
         let mut playbufs = HashMap::new();
@@ -36,18 +53,104 @@ impl MyState {
 
                 let key = slugify!(path.file_name().to_str().unwrap());
 
+                println!("loading {:?}", key);
+
                 // Load a sound from a file, using a path relative to Cargo.toml
                 let file = BufReader::new(File::open(path.path()).unwrap());
                 // Decode that sound file into a source
                 let source = Decoder::new(file).unwrap().buffered();
-                let conv = UniformSourceIterator::<_, i16>::new(
+                let conv = UniformSourceIterator::<_, f32>::new(
                     source,
                     DEFAULT_CHANNELS as u16,
                     DEFAULT_RATE,
                 )
                 .buffered();
-                let buf: Vec<i16> = conv.collect();
-                playbufs.insert(key, PlayBuf { buf });
+
+                let mut ebur =
+                    EbuR128::new(conv.channels() as u32, conv.sample_rate(), ebur128::Mode::I)
+                        .unwrap();
+
+                let buf: Vec<f32> = conv.clone().collect();
+
+                ebur.add_frames_f32(&buf).unwrap();
+
+                println!(
+                    "Integrated loudness: {:.1} LUFS",
+                    ebur.loudness_global().unwrap()
+                );
+
+                let amp = lufs_multiplier(ebur.loudness_global().unwrap() as f32, -16.0);
+
+                let adjusted: Vec<f32> = buf.iter().map(|s| *s * amp).collect();
+
+                //let mut processor = CompressorProcessor::new();
+                //processor.handle().set_ratio(30.0);
+                //processor.handle().set_threshold(-10.0);
+                //processor.handle().set_attack_ms(1.0);
+                //processor.handle().set_release_ms(5.0);
+                //processor.handle().set_knee_width(-1.0);
+
+                //let mut context = AudioContext::from(AudioProcessorSettings::new(
+                //    conv.sample_rate() as f32,
+                //    conv.channels().into(),
+                //    conv.channels().into(),
+                //    1024,
+                //));
+                //processor.prepare(&mut context);
+
+                //let mut adjusted = vec![];
+                //for chunk in buf.chunks(conv.channels() as usize * 512) {
+                //    let mut buffer = AudioBuffer::from_interleaved(conv.channels() as usize, chunk);
+
+                //    processor.process(&mut context, &mut buffer);
+
+                //    let mut poo = vec![0.0; chunk.len()];
+                //    buffer.copy_into_interleaved(&mut poo);
+                //    adjusted.extend(poo);
+                //}
+
+                let mut ebur = EbuR128::new(
+                    conv.clone().channels() as u32,
+                    conv.sample_rate(),
+                    ebur128::Mode::I,
+                )
+                .unwrap();
+
+                ebur.add_frames_f32(&adjusted).unwrap();
+
+                println!(
+                    "Integrated loudness: {:.1} LUFS",
+                    ebur.loudness_global().unwrap()
+                );
+
+                //// de-interleave
+
+                //let channel_power: Vec<_> = channel_samples
+                //    .iter()
+                //    .map(|samples| {
+                //        let mut meter = bs1770::ChannelLoudnessMeter::new(DEFAULT_RATE);
+                //        meter.push(samples.iter().map(|&s| f32::from(s)));
+                //        meter.into_100ms_windows()
+                //    })
+                //    .collect();
+
+                //let stereo_power =
+                //    bs1770::reduce_stereo(channel_power[0].as_ref(), channel_power[1].as_ref());
+
+                //let gated_power = bs1770::gated_mean(stereo_power.as_ref());
+                //println!(
+                //    "Integrated loudness: {:.1} LUFS",
+                //    gated_power.loudness_lkfs()
+                //);
+                let foo = SamplesBuffer::new(conv.channels(), conv.sample_rate(), adjusted);
+                let bar = SamplesConverter::<_, i16>::new(foo);
+
+                playbufs.insert(
+                    key,
+                    PlayBuf {
+                        buf: bar.buffered().collect(),
+                    },
+                );
             }
         }
 
@@ -94,16 +197,12 @@ where
 {
     fn into_response(self) -> Response {
         match self.0.render() {
-            Ok(html) => {
-                Html(html).into_response()
-            }
-            Err(err) => {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to render template. Error: {err}"),
-                )
-                    .into_response()
-            }
+            Ok(html) => Html(html).into_response(),
+            Err(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to render template. Error: {err}"),
+            )
+                .into_response(),
         }
     }
 }
