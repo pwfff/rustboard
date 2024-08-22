@@ -22,14 +22,14 @@ use pipewire::{
 pub const DEFAULT_RATE: u32 = 44100;
 pub const DEFAULT_CHANNELS: u32 = 2;
 pub const DEFAULT_VOLUME: f64 = 0.7;
-pub const CHAN_SIZE: usize = std::mem::size_of::<i16>();
+pub const CHAN_SIZE: usize = std::mem::size_of::<f32>();
 
 #[derive(Debug)]
 struct Done;
 
 #[derive(Debug, Clone)]
 pub struct PlayBuf {
-    pub buf: Vec<i16>,
+    pub buf: Vec<f32>,
 }
 
 struct State {
@@ -103,7 +103,7 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
                         if props.get("port.direction") != Some("in") {
                             return;
                         }
-                        println!("got project8");
+                        tracing::debug!("got project8");
                         state_clone.borrow_mut().set_deadlock(Some(
                             props.get("node.id").expect("node id nope").to_owned(),
                         ));
@@ -113,7 +113,7 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
                         if props.get("port.direction") != Some("in") {
                             return;
                         }
-                        println!("got discord");
+                        tracing::debug!("got discord");
                         state_clone.borrow_mut().set_discord(Some(
                             props.get("node.id").expect("node id nope").to_owned(),
                         ));
@@ -123,7 +123,7 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
                         if props.get("port.direction") != Some("out") {
                             return;
                         }
-                        println!("got loopback");
+                        tracing::debug!("got loopback");
                         state_clone.borrow_mut().set_loopback(Some(
                             props.get("node.id").expect("node id nope").to_owned(),
                         ));
@@ -141,7 +141,7 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
     let _receiver = pw_receiver.attach(mainloop.loop_(), {
         //let mainloop = mainloop.clone();
         move |playbuf| {
-            println!("got event");
+            tracing::debug!("got event");
             let nodes: Vec<String> = vec![
                 state_clone.borrow().discord_node.clone(),
                 state_clone.borrow().loopback_node.clone(),
@@ -151,7 +151,6 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
             .filter_map(|n| n.to_owned())
             .collect();
             for node_id in nodes {
-                println!("playing to {:?}", node_id);
                 play_to_node(&core, state_clone.clone(), playbuf.clone(), node_id);
             }
         }
@@ -165,7 +164,7 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
         // this auto disconnects stuff since the last references to stream/listener are dropped.
         state.players.retain(|player| {
             if let Ok(_) = player.done.try_recv() {
-                println!("disconnecting");
+                tracing::debug!("disconnecting");
                 false
             } else {
                 true
@@ -185,7 +184,7 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
 
     // audio info will be the same across all players, so might as well set this crap up now
     let mut audio_info = AudioInfoRaw::new();
-    audio_info.set_format(AudioFormat::S16LE);
+    audio_info.set_format(AudioFormat::F32LE);
     audio_info.set_rate(DEFAULT_RATE);
     audio_info.set_channels(DEFAULT_CHANNELS);
     let mut position = [0; MAX_CHANNELS];
@@ -215,23 +214,12 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
         .process(move |stream, cursor| {
             let buf = &playbuf.buf;
             if *cursor >= buf.len() {
-                // TODO: fix weird repeat sound at end??
-                //for data in datas {
-                //    if let Some(slice) = data.data() {
-                //        slice.fill_with(|| 0);
-                //    }
-                //    let chunk = data.chunk_mut();
-                //    *chunk.offset_mut() = 0;
-                //    *chunk.stride_mut() = 0;
-                //    *chunk.size_mut() = 0;
-                //}
                 done_tx_clone.send(Done).expect("couldnt notify done");
-                println!("dead stream bro");
+                //println!("dead stream bro");
                 return;
-                //*cursor = 0;
             }
             match stream.dequeue_buffer() {
-                None => println!("No buffer received"),
+                None => tracing::error!("No buffer received"),
                 Some(mut buffer) => {
                     let datas = buffer.datas_mut();
                     let stride = DEFAULT_CHANNELS as usize;
@@ -241,12 +229,13 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
                             let n_frames = slice.len() / CHAN_SIZE;
                             let start = *cursor;
                             let end = (n_frames + *cursor).min(buf.len());
-                            println!("n_frames {n_frames:#?} cursor {cursor:#?}");
+                            //println!("n_frames {n_frames:#?} cursor {cursor:#?}");
                             let sample: Vec<u8> = buf[start..end]
                                 .into_iter()
-                                .map(|v| i16::to_le_bytes(*v))
+                                .map(|v| v.to_le_bytes())
                                 .flatten()
                                 .collect();
+                            //println!("sample len {:?} slice len {:?}", sample.len(), slice.len());
                             slice[..sample.len()].copy_from_slice(&sample);
                             if sample.len() < slice.len() {
                                 slice[sample.len()..].fill_with(|| 0);
@@ -262,7 +251,7 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
                         *chunk.size_mut() = (stride * n_frames) as _;
                     }
 
-                    *cursor += n_frames;
+                    *cursor += n_frames / stride;
                 }
             }
         })
@@ -285,7 +274,6 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
 
     let node_id: u32 = node_id.parse().expect("wasnt u32");
 
-    println!("connecting stream? {:#?}", node_id);
     stream
         .connect(
             Direction::Output,
@@ -294,7 +282,6 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
             &mut params,
         )
         .expect("did no connect");
-    println!("connected stream? {:#?}", node_id);
 
     // pop our stream and listener onto the state. done will be set via channel by
     // the stream loop.

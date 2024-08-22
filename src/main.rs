@@ -1,8 +1,5 @@
 use crate::pw_helper::{DEFAULT_CHANNELS, DEFAULT_RATE};
 use askama::Template;
-use audio_processor_dynamics::CompressorProcessor;
-use audio_processor_traits::audio_buffer::to_interleaved;
-use audio_processor_traits::{AudioBuffer, AudioContext, AudioProcessor, AudioProcessorSettings};
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::response::{Html, IntoResponse, Response};
@@ -53,12 +50,15 @@ impl MyState {
 
                 let key = slugify!(path.file_name().to_str().unwrap());
 
-                println!("loading {:?}", key);
+                //println!("loading {:?}", key);
 
                 // Load a sound from a file, using a path relative to Cargo.toml
                 let file = BufReader::new(File::open(path.path()).unwrap());
+
                 // Decode that sound file into a source
-                let source = Decoder::new(file).unwrap().buffered();
+                let source = Decoder::new(file).unwrap();
+
+                // convert to known channels and sample rate
                 let conv = UniformSourceIterator::<_, f32>::new(
                     source,
                     DEFAULT_CHANNELS as u16,
@@ -66,89 +66,33 @@ impl MyState {
                 )
                 .buffered();
 
+                // measure overall loudness
                 let mut ebur =
-                    EbuR128::new(conv.channels() as u32, conv.sample_rate(), ebur128::Mode::I)
-                        .unwrap();
-
+                    EbuR128::new(DEFAULT_CHANNELS, DEFAULT_RATE, ebur128::Mode::I).unwrap();
                 let buf: Vec<f32> = conv.clone().collect();
-
                 ebur.add_frames_f32(&buf).unwrap();
-
-                println!(
-                    "Integrated loudness: {:.1} LUFS",
-                    ebur.loudness_global().unwrap()
-                );
-
-                let amp = lufs_multiplier(ebur.loudness_global().unwrap() as f32, -16.0);
-
-                let adjusted: Vec<f32> = buf.iter().map(|s| *s * amp).collect();
-
-                //let mut processor = CompressorProcessor::new();
-                //processor.handle().set_ratio(30.0);
-                //processor.handle().set_threshold(-10.0);
-                //processor.handle().set_attack_ms(1.0);
-                //processor.handle().set_release_ms(5.0);
-                //processor.handle().set_knee_width(-1.0);
-
-                //let mut context = AudioContext::from(AudioProcessorSettings::new(
-                //    conv.sample_rate() as f32,
-                //    conv.channels().into(),
-                //    conv.channels().into(),
-                //    1024,
-                //));
-                //processor.prepare(&mut context);
-
-                //let mut adjusted = vec![];
-                //for chunk in buf.chunks(conv.channels() as usize * 512) {
-                //    let mut buffer = AudioBuffer::from_interleaved(conv.channels() as usize, chunk);
-
-                //    processor.process(&mut context, &mut buffer);
-
-                //    let mut poo = vec![0.0; chunk.len()];
-                //    buffer.copy_into_interleaved(&mut poo);
-                //    adjusted.extend(poo);
-                //}
-
-                let mut ebur = EbuR128::new(
-                    conv.clone().channels() as u32,
-                    conv.sample_rate(),
-                    ebur128::Mode::I,
-                )
-                .unwrap();
-
-                ebur.add_frames_f32(&adjusted).unwrap();
-
-                println!(
-                    "Integrated loudness: {:.1} LUFS",
-                    ebur.loudness_global().unwrap()
-                );
-
-                //// de-interleave
-
-                //let channel_power: Vec<_> = channel_samples
-                //    .iter()
-                //    .map(|samples| {
-                //        let mut meter = bs1770::ChannelLoudnessMeter::new(DEFAULT_RATE);
-                //        meter.push(samples.iter().map(|&s| f32::from(s)));
-                //        meter.into_100ms_windows()
-                //    })
-                //    .collect();
-
-                //let stereo_power =
-                //    bs1770::reduce_stereo(channel_power[0].as_ref(), channel_power[1].as_ref());
-
-                //let gated_power = bs1770::gated_mean(stereo_power.as_ref());
                 //println!(
                 //    "Integrated loudness: {:.1} LUFS",
-                //    gated_power.loudness_lkfs()
+                //    ebur.loudness_global().unwrap()
                 //);
-                let foo = SamplesBuffer::new(conv.channels(), conv.sample_rate(), adjusted);
-                let bar = SamplesConverter::<_, i16>::new(foo);
+
+                // get float amp value from lufs
+                let amp = lufs_multiplier(ebur.loudness_global().unwrap() as f32, -16.0);
+                let adjusted: Vec<f32> = buf.iter().map(|s| *s * amp).collect();
+
+                // measure again
+                let mut ebur =
+                    EbuR128::new(DEFAULT_CHANNELS, DEFAULT_RATE, ebur128::Mode::I).unwrap();
+                ebur.add_frames_f32(&adjusted).unwrap();
+                //println!(
+                //    "Integrated loudness: {:.1} LUFS",
+                //    ebur.loudness_global().unwrap()
+                //);
 
                 playbufs.insert(
                     key,
                     PlayBuf {
-                        buf: bar.buffered().collect(),
+                        buf: adjusted,
                     },
                 );
             }
