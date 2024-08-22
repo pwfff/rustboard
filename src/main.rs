@@ -6,8 +6,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::{http::StatusCode, routing::get, routing::post, Router};
 use ebur128::EbuR128;
 use pipewire as pw;
-use rodio::buffer::SamplesBuffer;
-use rodio::source::{SamplesConverter, UniformSourceIterator};
+use rodio::source::UniformSourceIterator;
 use rodio::{Decoder, Source};
 use serde::{Deserialize, Serialize};
 use slugify::slugify;
@@ -18,7 +17,7 @@ use std::sync::{Arc, RwLock};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod pw_helper;
-use pw_helper::{pw_thread, PlayBuf};
+use pw_helper::{pw_thread, PlayBuf, TARGET_LUFS};
 
 struct MyState {
     playbufs: HashMap<String, PlayBuf>,
@@ -77,24 +76,19 @@ impl MyState {
                 //);
 
                 // get float amp value from lufs
-                let amp = lufs_multiplier(ebur.loudness_global().unwrap() as f32, -16.0);
+                let amp = lufs_multiplier(ebur.loudness_global().unwrap() as f32, TARGET_LUFS);
                 let adjusted: Vec<f32> = buf.iter().map(|s| *s * amp).collect();
 
                 // measure again
-                let mut ebur =
-                    EbuR128::new(DEFAULT_CHANNELS, DEFAULT_RATE, ebur128::Mode::I).unwrap();
-                ebur.add_frames_f32(&adjusted).unwrap();
+                //let mut ebur =
+                //    EbuR128::new(DEFAULT_CHANNELS, DEFAULT_RATE, ebur128::Mode::I).unwrap();
+                //ebur.add_frames_f32(&adjusted).unwrap();
                 //println!(
                 //    "Integrated loudness: {:.1} LUFS",
                 //    ebur.loudness_global().unwrap()
                 //);
 
-                playbufs.insert(
-                    key,
-                    PlayBuf {
-                        buf: adjusted,
-                    },
-                );
+                playbufs.insert(key, PlayBuf { buf: adjusted });
             }
         }
 
