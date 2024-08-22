@@ -21,7 +21,7 @@ use pipewire::{
 
 pub const DEFAULT_RATE: u32 = 44100;
 pub const DEFAULT_CHANNELS: u32 = 2;
-pub const TARGET_LUFS: f32 = -16;
+pub const TARGET_LUFS: f32 = -16.0;
 pub const CHAN_SIZE: usize = std::mem::size_of::<f32>();
 
 #[derive(Debug)]
