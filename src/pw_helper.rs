@@ -27,6 +27,12 @@ pub const CHAN_SIZE: usize = std::mem::size_of::<f32>();
 #[derive(Debug)]
 struct Done;
 
+#[derive(Debug)]
+pub enum Message {
+    Play(PlayBuf),
+    Stop(),
+}
+
 #[derive(Debug, Clone)]
 pub struct PlayBuf {
     pub buf: Vec<f32>,
@@ -43,7 +49,8 @@ struct State {
 struct Player {
     _stream: Stream,
     _listener: StreamListener<usize>,
-    done: mpsc::Receiver<Done>,
+    done_tx: mpsc::Sender<Done>,
+    done_rx: mpsc::Receiver<Done>,
 }
 
 impl State {
@@ -78,7 +85,7 @@ impl State {
     }
 }
 
-pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
+pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<Message>) {
     let mainloop = MainLoop::new(None).expect("failed to create main loop");
     let context = Context::new(&mainloop).expect("failed to create context");
     let core = context.connect(None).expect("failed to connect to core");
@@ -140,18 +147,27 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
     let state_clone = state.clone();
     let _receiver = pw_receiver.attach(mainloop.loop_(), {
         //let mainloop = mainloop.clone();
-        move |playbuf| {
+        move |message| {
             tracing::debug!("got event");
-            let nodes: Vec<String> = vec![
-                state_clone.borrow().discord_node.clone(),
-                state_clone.borrow().loopback_node.clone(),
-                state_clone.borrow().deadlock_node.clone(),
-            ]
-            .iter()
-            .filter_map(|n| n.to_owned())
-            .collect();
-            for node_id in nodes {
-                play_to_node(&core, state_clone.clone(), playbuf.clone(), node_id);
+            match message {
+                Message::Play(playbuf) => {
+                    let nodes: Vec<String> = vec![
+                        state_clone.borrow().discord_node.clone(),
+                        state_clone.borrow().loopback_node.clone(),
+                        state_clone.borrow().deadlock_node.clone(),
+                    ]
+                    .iter()
+                    .filter_map(|n| n.to_owned())
+                    .collect();
+                    for node_id in nodes {
+                        play_to_node(&core, state_clone.clone(), playbuf.clone(), node_id);
+                    }
+                }
+                Message::Stop() => {
+                    for p in state_clone.borrow().players.iter() {
+                        p.done_tx.send(Done).unwrap();
+                    }
+                }
             }
         }
     });
@@ -163,7 +179,7 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<PlayBuf>) {
         // loop over players, drop the ones that are done.
         // this auto disconnects stuff since the last references to stream/listener are dropped.
         state.players.retain(|player| {
-            if let Ok(_) = player.done.try_recv() {
+            if let Ok(_) = player.done_rx.try_recv() {
                 tracing::debug!("disconnecting");
                 false
             } else {
@@ -288,7 +304,8 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
     let player = Player {
         _stream: stream,
         _listener: listener,
-        done: done_rx,
+        done_tx,
+        done_rx,
     };
     state.add_player(player);
 }
