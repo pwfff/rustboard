@@ -1,3 +1,4 @@
+{% let button = "button wrap-button-text is-large is-link is-justify-content-flex-start has-text-left is-fullwidth" -%}
 <!doctype html>
 <html lang="en">
   <head>
@@ -6,6 +7,12 @@
     <title>rustboard</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css" integrity="sha512-Kc323vGBEqzTmouAECnVceyQqyqdsSiqLQISBL29aUW4U/M7pSPA/gEUZQqv1cwx4OnYxTxve5UMg5GT6L4JJg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css">
+    <style>
+    .wrap-button-text {
+        height: 100%;
+        white-space: inherit;
+    }
+    </style>
     <script>
       function stop() {
         fetch('/stop', {method: 'POST'})
@@ -19,21 +26,27 @@
   <body>
     <section class="section">
       <div class="container">
-        <div class="panel is-link">
-          <div class="panel-block" onClick="stop()">
-            <span class="panel-icon is-danger">
-              <i class="fas fa-stop" aria-hidden="true"></i>
-            </span>
-            stop
+        <div class="fixed-grid has-4-cols">
+          <div class="grid">
+            <div class="cell is-col-span-4" onClick="stop()">
+              <button class="{{ button }} is-danger" onClick="stop()">
+                <span class="panel-icon my-auto is-danger">
+                  <i class="fas fa-stop" aria-hidden="true"></i>
+                </span>
+                stop
+              </button>
+            </div>
+          {% for sound in sounds -%}
+            <div class="cell" onClick="play('{{ sound }}')">
+              <button class="{{ button }}" onClick="stop()">
+                <span class="panel-icon my-auto">
+                  <i class="fas fa-play" aria-hidden="true"></i>
+                </span>
+                <span class="is-size-5">{{ sound }}</span>
+              </button>
+            </div>
+          {% endfor %}
           </div>
-        {% for sound in sounds -%}
-          <div class="panel-block" onClick="play('{{ sound }}')">
-            <span class="panel-icon is-danger">
-              <i class="fas fa-play" aria-hidden="true"></i>
-            </span>
-            {{ sound }}
-          </div>
-        {% endfor %}
         </div>
       </div>
     </section>
