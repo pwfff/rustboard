@@ -147,26 +147,25 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<Message>) {
     let state_clone = state.clone();
     let _receiver = pw_receiver.attach(mainloop.loop_(), {
         //let mainloop = mainloop.clone();
-        move |message| {
-            tracing::debug!("got event");
-            match message {
-                Message::Play(playbuf) => {
-                    let nodes: Vec<String> = vec![
-                        state_clone.borrow().discord_node.clone(),
-                        state_clone.borrow().loopback_node.clone(),
-                        state_clone.borrow().deadlock_node.clone(),
-                    ]
-                    .iter()
-                    .filter_map(|n| n.to_owned())
-                    .collect();
-                    for node_id in nodes {
-                        play_to_node(&core, state_clone.clone(), playbuf.clone(), node_id);
-                    }
+        move |message| match message {
+            Message::Play(playbuf) => {
+                tracing::debug!("got event play");
+                let nodes: Vec<String> = vec![
+                    state_clone.borrow().discord_node.clone(),
+                    state_clone.borrow().loopback_node.clone(),
+                    state_clone.borrow().deadlock_node.clone(),
+                ]
+                .iter()
+                .filter_map(|n| n.to_owned())
+                .collect();
+                for node_id in nodes {
+                    play_to_node(&core, state_clone.clone(), playbuf.clone(), node_id);
                 }
-                Message::Stop() => {
-                    for p in state_clone.borrow().players.iter() {
-                        p.done_tx.send(Done).unwrap();
-                    }
+            }
+            Message::Stop() => {
+                tracing::debug!("got event stop");
+                for p in state_clone.borrow().players.iter() {
+                    p.done_tx.send(Done).unwrap();
                 }
             }
         }

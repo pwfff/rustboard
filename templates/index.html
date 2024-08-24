@@ -28,7 +28,7 @@
       <div class="container">
         <div class="fixed-grid has-4-cols">
           <div class="grid">
-            <div class="cell is-col-span-4" onClick="stop()">
+            <div class="cell is-col-span-4">
               <button class="{{ button }} is-danger" onClick="stop()">
                 <span class="panel-icon my-auto is-danger">
                   <i class="fas fa-stop" aria-hidden="true"></i>
@@ -37,8 +37,8 @@
               </button>
             </div>
           {% for sound in sounds -%}
-            <div class="cell" onClick="play('{{ sound }}')">
-              <button class="{{ button }}" onClick="stop()">
+            <div class="cell">
+              <button class="{{ button }}" onClick="play('{{ sound }}')">
                 <span class="panel-icon my-auto">
                   <i class="fas fa-play" aria-hidden="true"></i>
                 </span>
