@@ -150,7 +150,7 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<Message>) {
         move |message| match message {
             Message::Play(playbuf) => {
                 tracing::debug!("got event play");
-                let nodes: Vec<String> = vec![
+                let nodes: Vec<String> = [
                     state_clone.borrow().discord_node.clone(),
                     state_clone.borrow().loopback_node.clone(),
                     state_clone.borrow().deadlock_node.clone(),
@@ -178,7 +178,7 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<Message>) {
         // loop over players, drop the ones that are done.
         // this auto disconnects stuff since the last references to stream/listener are dropped.
         state.players.retain(|player| {
-            if let Ok(_) = player.done_rx.try_recv() {
+            if player.done_rx.try_recv().is_ok() {
                 tracing::debug!("disconnecting");
                 false
             } else {

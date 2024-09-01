@@ -3,6 +3,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::response::{Html, IntoResponse, Response};
 use axum::{http::StatusCode, routing::get, routing::post, Router};
+use itertools::Itertools;
 use load_audio::process_sound;
 use pipewire as pw;
 use serde::{Deserialize, Serialize};
@@ -105,7 +106,7 @@ async fn list(State(state): State<SharedState>) -> impl IntoResponse {
     let playbufs = &state.playbufs;
 
     let template = SoundsTemplate {
-        sounds: playbufs.keys().map(|k| k.clone()).collect(),
+        sounds: playbufs.keys().sorted().cloned().collect(),
     };
 
     HtmlTemplate(template)

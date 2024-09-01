@@ -21,6 +21,32 @@
       function play(key) {
         fetch('/sounds/' + key, {method: 'POST'})
       }
+
+      /**
+       * Returns a hash code from a string
+       * @param  {String} str The string to hash.
+       * @return {Number}    A 32bit integer
+       * @see http://werxltd.com/wp/2010/05/13/javascript-implementation-of-javas-string-hashcode-method/
+       */
+      function hashCode(str) {
+          let hash = 0;
+          for (let i = 0, len = str.length; i < len; i++) {
+              let chr = str.charCodeAt(i);
+              hash = (hash << 5) - hash + chr;
+              hash |= 0; // Convert to 32bit integer
+          }
+          return hash;
+      }
+
+      document.addEventListener('DOMContentLoaded', function() {
+        document.querySelectorAll('.button').forEach(b => {
+          if (b.id == '') {
+            return;
+          }
+          const color = hashCode(b.id) % 255;
+          b.style.backgroundColor = `hsl(${color}deg, 100%, 30%)`;
+        });
+      });
     </script>
   </head>
   <body>
@@ -38,7 +64,7 @@
             </div>
           {% for sound in sounds -%}
             <div class="cell">
-              <button class="{{ button }}" onClick="play('{{ sound }}')">
+              <button id="{{ sound }}" class="{{ button }}" onClick="play('{{ sound }}')">
                 <span class="panel-icon my-auto">
                   <i class="fas fa-play" aria-hidden="true"></i>
                 </span>
