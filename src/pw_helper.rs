@@ -246,11 +246,17 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
                             let end = (n_frames + *cursor).min(buf.len());
                             //println!("n_frames {n_frames:#?} cursor {cursor:#?}");
                             let sample: Vec<u8> = buf[start..end]
-                                .into_iter()
-                                .map(|v| v.to_le_bytes())
-                                .flatten()
+                                .iter()
+                                .flat_map(|v| v.to_le_bytes())
                                 .collect();
-                            //println!("sample len {:?} slice len {:?}", sample.len(), slice.len());
+                            //println!(
+                            //    "slice {:?} n_frames {:?} start {:?} end {:?} sample {:?}",
+                            //    slice.len(),
+                            //    n_frames,
+                            //    start,
+                            //    end,
+                            //    sample.len()
+                            //);
                             slice[..sample.len()].copy_from_slice(&sample);
                             if sample.len() < slice.len() {
                                 slice[sample.len()..].fill_with(|| 0);
@@ -266,7 +272,7 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
                         *chunk.size_mut() = (stride * n_frames) as _;
                     }
 
-                    *cursor += n_frames / stride;
+                    *cursor += (n_frames / stride) + 1;
                 }
             }
         })
