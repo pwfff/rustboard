@@ -272,7 +272,7 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
                         *chunk.size_mut() = (stride * n_frames) as _;
                     }
 
-                    *cursor += (n_frames / stride) + 1;
+                    *cursor += (n_frames / stride) - 1;
                 }
             }
         })
