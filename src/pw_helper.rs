@@ -2,7 +2,6 @@ use std::{
     cell::{Cell, RefCell},
     rc::Rc,
     sync::mpsc,
-    time::Duration,
 };
 
 use pipewire::{
@@ -35,15 +34,15 @@ pub enum Message {
 
 #[derive(Debug, Clone)]
 pub struct PlayBuf {
-    pub buf: Vec<f32>,
+    pub buf: Vec<u8>,
 }
 
-struct State {
-    factory: Option<String>,
-    loopback_node: Option<String>,
-    discord_node: Option<String>,
-    deadlock_node: Option<String>,
-    players: Vec<Player>,
+impl PlayBuf {
+    pub fn new(f32s: Vec<f32>) -> Self {
+        Self {
+            buf: f32s.iter().flat_map(|v| v.to_le_bytes()).collect(),
+        }
+    }
 }
 
 struct Player {
@@ -51,6 +50,14 @@ struct Player {
     _listener: StreamListener<usize>,
     done_tx: mpsc::Sender<Done>,
     done_rx: mpsc::Receiver<Done>,
+}
+
+struct State {
+    factory: Option<String>,
+    loopback_node: Option<u32>,
+    discord_node: Option<u32>,
+    deadlock_node: Option<u32>,
+    players: Vec<Player>,
 }
 
 impl State {
@@ -68,15 +75,15 @@ impl State {
         self.factory = Some(factory);
     }
 
-    fn set_loopback(&mut self, loopback_node: Option<String>) {
+    fn set_loopback(&mut self, loopback_node: Option<u32>) {
         self.loopback_node = loopback_node;
     }
 
-    fn set_deadlock(&mut self, deadlock_node: Option<String>) {
+    fn set_deadlock(&mut self, deadlock_node: Option<u32>) {
         self.deadlock_node = deadlock_node;
     }
 
-    fn set_discord(&mut self, discord_node: Option<String>) {
+    fn set_discord(&mut self, discord_node: Option<u32>) {
         self.discord_node = discord_node;
     }
 
@@ -94,46 +101,60 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<Message>) {
     let state: Rc<RefCell<State>> = Rc::new(RefCell::new(State::new()));
 
     // first set up listener. this will maintain our state so we always have the latest node IDs
-    let state_clone = state.clone();
     let _listener = registry
         .add_listener_local()
-        .global(move |global| {
-            if let Some(props) = global.props {
-                if props.get("factory.type.name") == Some(ObjectType::Link.to_str()) {
-                    let factory_name = props.get("factory.name").expect("Factory has no name");
-                    state_clone.borrow_mut().set_factory(factory_name.into());
-                    return;
-                }
-
-                if let Some(alias) = props.get("port.alias") {
-                    if alias.contains("project8") {
-                        if props.get("port.direction") != Some("in") {
-                            return;
-                        }
-                        tracing::debug!("got project8");
-                        state_clone.borrow_mut().set_deadlock(Some(
-                            props.get("node.id").expect("node id nope").to_owned(),
-                        ));
+        .global({
+            let state = state.clone();
+            move |global| {
+                if let Some(props) = global.props {
+                    if props.get("factory.type.name") == Some(ObjectType::Link.to_str()) {
+                        let factory_name = props.get("factory.name").expect("Factory has no name");
+                        state.borrow_mut().set_factory(factory_name.into());
+                        return;
                     }
 
-                    if alias.contains("WEBRTC") {
-                        if props.get("port.direction") != Some("in") {
-                            return;
+                    if let Some(alias) = props.get("port.alias") {
+                        if alias.contains("project8") {
+                            if props.get("port.direction") != Some("in") {
+                                return;
+                            }
+                            tracing::debug!("got project8");
+                            state.borrow_mut().set_deadlock(Some(
+                                props
+                                    .get("node.id")
+                                    .expect("node id nope")
+                                    .parse()
+                                    .expect("couldnt parse deadlock node"),
+                            ));
                         }
-                        tracing::debug!("got discord");
-                        state_clone.borrow_mut().set_discord(Some(
-                            props.get("node.id").expect("node id nope").to_owned(),
-                        ));
-                    }
 
-                    if alias.contains("MOMENTUM") {
-                        if props.get("port.direction") != Some("out") {
-                            return;
+                        if alias.contains("WEBRTC") {
+                            if props.get("port.direction") != Some("in") {
+                                return;
+                            }
+                            tracing::debug!("got discord");
+                            state.borrow_mut().set_discord(Some(
+                                props
+                                    .get("node.id")
+                                    .expect("node id nope")
+                                    .parse()
+                                    .expect("couldnt parse discord node"),
+                            ));
                         }
-                        tracing::debug!("got loopback");
-                        state_clone.borrow_mut().set_loopback(Some(
-                            props.get("node.id").expect("node id nope").to_owned(),
-                        ));
+
+                        if alias.contains("MOMENTUM") {
+                            if props.get("port.direction") != Some("out") {
+                                return;
+                            }
+                            tracing::debug!("got loopback");
+                            state.borrow_mut().set_loopback(Some(
+                                props
+                                    .get("node.id")
+                                    .expect("node id nope")
+                                    .parse()
+                                    .expect("couldnt parse loopback node"),
+                            ));
+                        }
                     }
                 }
             }
@@ -143,60 +164,53 @@ pub fn pw_thread(pw_receiver: pipewire::channel::Receiver<Message>) {
     // Process all pending events to get the factory.
     do_roundtrip(&mainloop, &core);
 
-    // setup listener for play events
-    let state_clone = state.clone();
-    let _receiver = pw_receiver.attach(mainloop.loop_(), {
-        //let mainloop = mainloop.clone();
-        move |message| match message {
-            Message::Play(playbuf) => {
-                tracing::debug!("got event play");
-                let nodes: Vec<String> = [
-                    state_clone.borrow().discord_node.clone(),
-                    state_clone.borrow().loopback_node.clone(),
-                    state_clone.borrow().deadlock_node.clone(),
-                ]
-                .iter()
-                .filter_map(|n| n.to_owned())
-                .collect();
-                for node_id in nodes {
-                    play_to_node(&core, state_clone.clone(), playbuf.clone(), node_id);
+    let _idle = mainloop.loop_().add_idle(true, {
+        let state = state.clone();
+        move || {
+            state.borrow_mut().players.retain(|player| {
+                if player.done_rx.try_recv().is_ok() {
+                    tracing::debug!("disconnecting");
+                    false
+                } else {
+                    true
                 }
-            }
-            Message::Stop() => {
-                tracing::debug!("got event stop");
-                for p in state_clone.borrow().players.iter() {
-                    p.done_tx.send(Done).unwrap();
+            });
+        }
+    });
+
+    // setup listener for play events
+    let _receiver = pw_receiver.attach(mainloop.loop_(), {
+        {
+            let state = state.clone();
+            move |message| match message {
+                Message::Play(playbuf) => {
+                    tracing::debug!("got event play");
+                    let nodes: Vec<u32> = [
+                        state.borrow().discord_node,
+                        state.borrow().loopback_node,
+                        state.borrow().deadlock_node,
+                    ]
+                    .iter()
+                    .filter_map(|&n| n)
+                    .collect();
+
+                    for node in nodes {
+                        play_to_node(&core, state.clone(), playbuf.clone(), node);
+                    }
+                }
+                Message::Stop() => {
+                    for p in state.borrow().players.iter() {
+                        p.done_tx.send(Done).unwrap();
+                    }
                 }
             }
         }
     });
 
-    let state_clone = state.clone();
-    let timer = mainloop.loop_().add_timer(move |_| {
-        let mut state = state_clone.borrow_mut();
-
-        // loop over players, drop the ones that are done.
-        // this auto disconnects stuff since the last references to stream/listener are dropped.
-        state.players.retain(|player| {
-            if player.done_rx.try_recv().is_ok() {
-                tracing::debug!("disconnecting");
-                false
-            } else {
-                true
-            }
-        });
-    });
-    timer.update_timer(
-        Some(Duration::from_millis(10)),
-        Some(Duration::from_millis(100)),
-    );
-
     mainloop.run();
 }
 
-fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_id: String) {
-    let mut state = state.borrow_mut();
-
+fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_id: u32) {
     // audio info will be the same across all players, so might as well set this crap up now
     let mut audio_info = AudioInfoRaw::new();
     audio_info.set_format(AudioFormat::F32LE);
@@ -224,15 +238,10 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
     // channel for telling timer when to drop the stream/listener
     let (done_tx, done_rx) = mpsc::channel();
     let done_tx_clone = done_tx.clone();
-    let listener = stream
+    let _listener = stream
         .add_local_listener_with_user_data(cursor)
         .process(move |stream, cursor| {
             let buf = &playbuf.buf;
-            if *cursor >= buf.len() {
-                done_tx_clone.send(Done).expect("couldnt notify done");
-                //println!("dead stream bro");
-                return;
-            }
             match stream.dequeue_buffer() {
                 None => tracing::error!("No buffer received"),
                 Some(mut buffer) => {
@@ -240,39 +249,35 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
                     let stride = DEFAULT_CHANNELS as usize;
                     let mut n_frames = 0;
                     for data in datas {
-                        n_frames = if let Some(slice) = data.data() {
-                            let n_frames = slice.len() / CHAN_SIZE;
-                            let start = *cursor;
-                            let end = (n_frames + *cursor).min(buf.len());
-                            //println!("n_frames {n_frames:#?} cursor {cursor:#?}");
-                            let sample: Vec<u8> = buf[start..end]
-                                .iter()
-                                .flat_map(|v| v.to_le_bytes())
-                                .collect();
-                            //println!(
-                            //    "slice {:?} n_frames {:?} start {:?} end {:?} sample {:?}",
-                            //    slice.len(),
-                            //    n_frames,
-                            //    start,
-                            //    end,
-                            //    sample.len()
-                            //);
-                            slice[..sample.len()].copy_from_slice(&sample);
-                            if sample.len() < slice.len() {
-                                slice[sample.len()..].fill_with(|| 0);
+                        if *cursor >= buf.len() {
+                            //println!("dead stream bro");
+                            if let Some(slice) = data.data() {
+                                slice.fill(0);
                             }
-                            n_frames
+                            done_tx_clone.send(Done).expect("couldnt notify done");
                         } else {
-                            0
-                        };
+                            n_frames = if let Some(slice) = data.data() {
+                                let n_frames = slice.len() / CHAN_SIZE;
+                                let start = *cursor;
+                                let end = (*cursor + slice.len()).min(buf.len());
+                                let size = end - start;
+                                slice[..size].copy_from_slice(&buf[start..end]);
+                                if size < slice.len() {
+                                    slice[size..].fill(0);
+                                }
+                                n_frames
+                            } else {
+                                0
+                            };
+                        }
 
                         let chunk = data.chunk_mut();
                         *chunk.offset_mut() = 0;
                         *chunk.stride_mut() = stride as _;
-                        *chunk.size_mut() = (stride * n_frames) as _;
+                        *chunk.size_mut() = (n_frames * CHAN_SIZE) as _;
                     }
 
-                    *cursor += (n_frames / stride) - 1;
+                    *cursor += n_frames * CHAN_SIZE;
                 }
             }
         })
@@ -293,8 +298,6 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
 
     let mut params = [Pod::from_bytes(&values).unwrap()];
 
-    let node_id: u32 = node_id.parse().expect("wasnt u32");
-
     stream
         .connect(
             Direction::Output,
@@ -304,15 +307,12 @@ fn play_to_node(core: &Core, state: Rc<RefCell<State>>, playbuf: PlayBuf, node_i
         )
         .expect("did no connect");
 
-    // pop our stream and listener onto the state. done will be set via channel by
-    // the stream loop.
-    let player = Player {
+    state.borrow_mut().add_player(Player {
+        _listener,
         _stream: stream,
-        _listener: listener,
-        done_tx,
         done_rx,
-    };
-    state.add_player(player);
+        done_tx,
+    });
 }
 
 /// Do a single roundtrip to process all events.

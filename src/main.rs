@@ -9,6 +9,7 @@ use pipewire as pw;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod pw_helper;
@@ -36,10 +37,13 @@ impl MyState {
             .filter(|path| path.file_name() != "__placeholder__")
             .map(|path| tokio::spawn(process_sound(path)))
             .collect();
+
         for task in tasks {
             let (k, v) = task.await.unwrap();
             playbufs.insert(k, v);
         }
+
+        info!("done loading sounds");
 
         MyState {
             playbufs,

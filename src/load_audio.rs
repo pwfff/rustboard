@@ -57,5 +57,5 @@ pub async fn process_sound(path: DirEntry) -> (String, PlayBuf) {
     //    ebur.loudness_global().unwrap()
     //);
 
-    (key.clone(), PlayBuf { buf: adjusted })
+    (key.clone(), PlayBuf::new(adjusted))
 }
